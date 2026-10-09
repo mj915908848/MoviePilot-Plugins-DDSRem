@@ -167,17 +167,20 @@ class DuplicateLocalMappingTests(unittest.TestCase):
         self.targets = [root / name / "影视库" for name in ("CD2", "PT", "PT2")]
         self.relative_path = Path("电影/欧美电影/浴血黑帮：不朽传奇 (2026) {tmdb-875828}/movie.strm")
         self.emby_path = str(self.source / self.relative_path)
+        self.series_relative_path = Path("电视剧/国产剧/百花杀 (2026) {tmdb-286506}")
+        self.series_emby_path = str(self.source / self.series_relative_path)
         self.plugin = load_lookup_method()()
         self.plugin._local_library_path = "\n".join(
             f"{self.source}#{target}" for target in self.targets
         )
 
-    def find(self, media_type="MOV", season_num=None, episode_num=None):
+    def find(self, media_type="MOV", season_num=None, episode_num=None, media_path=None,
+             tmdb_id=875828):
         return self.plugin._SaMediaSyncDel__find_local_transfer_his(
             media_type=media_type,
             media_name="浴血黑帮：不朽传奇 (2026)",
-            media_path=self.emby_path,
-            tmdb_id=875828,
+            media_path=media_path or self.emby_path,
+            tmdb_id=tmdb_id,
             season_num=season_num,
             episode_num=episode_num,
         )
@@ -295,13 +298,54 @@ class DuplicateLocalMappingTests(unittest.TestCase):
         self.assertEqual(histories, [expected])
 
     def test_whole_series_lookup_does_not_duplicate_path_independent_records(self):
-        expected = TransferHistory(875828, MediaType.TV.value, "unrelated/path.mkv")
+        expected = TransferHistory(
+            286506, MediaType.TV.value,
+            str(self.targets[0] / self.series_relative_path / "Season 1/E01.mp4"),
+        )
         self.plugin._transferhis = TransferHistoryOper([expected])
 
-        mapped_path, _, histories = self.find(media_type="Series")
+        mapped_path, _, histories = self.find(
+            media_type="Series", media_path=self.series_emby_path, tmdb_id=286506
+        )
 
-        self.assertEqual(mapped_path, str(self.targets[0] / self.relative_path))
+        self.assertEqual(mapped_path, self.series_emby_path)
         self.assertEqual(histories, [expected])
+
+    def test_whole_series_selects_all_mapped_records_with_existing_media_files(self):
+        first_dest = self.targets[0] / self.series_relative_path / "Season 1/E04.mp4"
+        second_dest = self.targets[1] / self.series_relative_path / "Season 1/E07.mkv"
+        for dest in (first_dest, second_dest):
+            dest.parent.mkdir(parents=True)
+            dest.touch()
+        first = TransferHistory(286506, MediaType.TV.value, str(first_dest))
+        second = TransferHistory(286506, MediaType.TV.value, str(second_dest))
+        unrelated = TransferHistory(
+            286506, MediaType.TV.value,
+            str(self.targets[2] / "电视剧/国产剧/其他剧/Season 1/E01.mkv"),
+        )
+        self.plugin._transferhis = TransferHistoryOper([first, second, unrelated])
+
+        mapped_path, _, histories = self.find(
+            media_type="Series", media_path=self.series_emby_path, tmdb_id=286506
+        )
+
+        self.assertEqual(mapped_path, self.series_emby_path)
+        self.assertEqual(histories, [first, second])
+
+    def test_whole_series_skips_when_emby_directory_still_exists(self):
+        Path(self.series_emby_path).mkdir(parents=True)
+        record = TransferHistory(
+            286506, MediaType.TV.value,
+            str(self.targets[0] / self.series_relative_path / "Season 1/E04.mp4"),
+        )
+        self.plugin._transferhis = TransferHistoryOper([record])
+
+        mapped_path, _, histories = self.find(
+            media_type="Series", media_path=self.series_emby_path, tmdb_id=286506
+        )
+
+        self.assertIsNone(mapped_path)
+        self.assertEqual(histories, [])
 
 
 if __name__ == "__main__":
