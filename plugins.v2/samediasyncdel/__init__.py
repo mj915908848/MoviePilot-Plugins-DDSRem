@@ -34,7 +34,7 @@ class SaMediaSyncDel(_PluginBase):
     # 插件图标
     plugin_icon = "mediasyncdel.png"
     # 插件版本
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.12"
     # 插件作者
     plugin_author = "DDSRem,thsrite"
     # 作者主页
@@ -866,6 +866,30 @@ class SaMediaSyncDel(_PluginBase):
         if not mapped_paths:
             logger.error(f"{media_name} 同步删除失败，未匹配到本地媒体库路径映射")
             return None, None, []
+
+        if media_type not in ["Movie", "MOV"] and not season_num and not episode_num:
+            # 整剧删除时，STRM 目录已消失，但映射目标里的实际视频目录仍会存在。
+            if Path(media_path).exists():
+                logger.warn(f"媒体库路径 {media_path} 未被删除或重新生成，跳过处理")
+                return None, None, []
+
+            series_dirs = [Path(path) for path in mapped_paths]
+            histories = self._transferhis.get_by(
+                tmdbid=tmdb_id, mtype=MediaType.TV.value
+            ) or []
+            matched_histories = [
+                history
+                for history in histories
+                if history.dest
+                and any(
+                    Path(history.dest.replace("\\", "/")).is_relative_to(series_dir)
+                    for series_dir in series_dirs
+                )
+            ]
+            if matched_histories:
+                return media_path, f"剧集 {media_name} {tmdb_id}", matched_histories
+            logger.warning(f"{media_name} 未匹配到整剧转移记录，映射后候选路径: {mapped_paths}")
+            return None, "", []
 
         # 整剧和整季按 TMDB ID 查询，遍历映射会把相同记录重复计为多个结果。
         if media_type not in ["Movie", "MOV"] and not (season_num and episode_num):
