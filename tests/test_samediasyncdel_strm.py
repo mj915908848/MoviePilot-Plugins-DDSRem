@@ -207,6 +207,65 @@ class DuplicateLocalMappingTests(unittest.TestCase):
         self.assertIsNone(mapped_path)
         self.assertEqual(histories, [])
 
+    def test_strm_filename_selects_one_matching_version(self):
+        matching = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[0] / self.relative_path).with_suffix(".mkv")),
+        )
+        other = self.history_at(self.targets[2])
+        self.plugin._transferhis = TransferHistoryOper([matching, other])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertEqual(mapped_path, str(self.targets[0] / self.relative_path))
+        self.assertEqual(histories, [matching])
+
+    def test_same_strm_filename_in_two_destinations_remains_ambiguous(self):
+        first = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[0] / self.relative_path).with_suffix(".mkv")),
+        )
+        third = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[2] / self.relative_path).with_suffix(".mkv")),
+        )
+        self.plugin._transferhis = TransferHistoryOper([first, third])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertIsNone(mapped_path)
+        self.assertEqual(histories, [])
+
+    def test_single_mapping_selects_one_matching_filename(self):
+        self.plugin._local_library_path = f"{self.source}#{self.targets[0]}"
+        matching = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[0] / self.relative_path).with_suffix(".mkv")),
+        )
+        other = self.history_at(self.targets[0])
+        self.plugin._transferhis = TransferHistoryOper([matching, other])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertEqual(mapped_path, str(self.targets[0] / self.relative_path))
+        self.assertEqual(histories, [matching])
+
+    def test_exact_strm_history_has_priority_over_media_fallback(self):
+        exact = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str(self.targets[0] / self.relative_path),
+        )
+        media = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[2] / self.relative_path).with_suffix(".mkv")),
+        )
+        self.plugin._transferhis = TransferHistoryOper([exact, media])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertEqual(mapped_path, str(self.targets[0] / self.relative_path))
+        self.assertEqual(histories, [exact])
+
     def test_ambiguous_first_destination_cannot_select_third(self):
         first = self.history_at(self.targets[0])
         another = TransferHistory(
