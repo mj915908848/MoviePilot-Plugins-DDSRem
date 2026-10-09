@@ -34,7 +34,7 @@ class SaMediaSyncDel(_PluginBase):
     # 插件图标
     plugin_icon = "mediasyncdel.png"
     # 插件版本
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     # 插件作者
     plugin_author = "DDSRem,thsrite"
     # 作者主页
@@ -884,19 +884,56 @@ class SaMediaSyncDel(_PluginBase):
         if not available_paths:
             return None, None, []
 
-        if strm_movie and len(available_paths) > 1:
-            media_dirs = {Path(path).parent for path in available_paths}
-            media_exts = {ext.lower() for ext in settings.RMT_MEDIAEXT}
-            possible_histories = [
-                history
-                for history in self._transferhis.get_by(
-                    tmdbid=tmdb_id, mtype=MediaType.MOVIE.value
+        if strm_movie and tmdb_id and str(tmdb_id).isdigit():
+            movie_type = MediaType.MOVIE.value
+            msg = f"电影 {media_name} {tmdb_id}"
+            exact_matches = [
+                (mapped_path, history)
+                for mapped_path in available_paths
+                for history in (
+                    self._transferhis.get_by(
+                        tmdbid=tmdb_id, mtype=movie_type, dest=mapped_path
+                    )
+                    or []
                 )
+            ]
+            if len(exact_matches) == 1:
+                mapped_path, history = exact_matches[0]
+                return mapped_path, msg, [history]
+            if len(exact_matches) > 1:
+                logger.warning(f"{media_name} 在多个本地路径映射中找到精确记录，跳过自动删除")
+                return None, None, []
+
+            media_exts = {ext.lower() for ext in settings.RMT_MEDIAEXT}
+            movie_histories = self._transferhis.get_by(
+                tmdbid=tmdb_id, mtype=movie_type
+            ) or []
+            media_matches = [
+                (mapped_path, history)
+                for mapped_path in available_paths
+                for history in movie_histories
                 if history.dest
-                and Path(history.dest.replace("\\", "/")).parent in media_dirs
+                and Path(history.dest.replace("\\", "/")).parent
+                == Path(mapped_path).parent
                 and Path(history.dest).suffix.lower() in media_exts
             ]
-            if len(possible_histories) > 1:
+            if len(media_matches) == 1:
+                mapped_path, history = media_matches[0]
+                logger.info(f"STRM 电影 {mapped_path} 匹配到唯一转移记录 {history.dest}")
+                return mapped_path, msg, [history]
+            if len(media_matches) > 1:
+                filename_matches = [
+                    (mapped_path, history)
+                    for mapped_path, history in media_matches
+                    if Path(history.dest.replace("\\", "/")).stem.casefold()
+                    == Path(mapped_path).stem.casefold()
+                ]
+                if len(filename_matches) == 1:
+                    mapped_path, history = filename_matches[0]
+                    logger.info(
+                        f"STRM 电影 {mapped_path} 按文件名匹配到转移记录 {history.dest}"
+                    )
+                    return mapped_path, msg, [history]
                 logger.warning(
                     f"{media_name} 在本地路径映射中找到多条电影转移记录，跳过自动删除"
                 )
