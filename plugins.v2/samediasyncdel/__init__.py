@@ -34,7 +34,7 @@ class SaMediaSyncDel(_PluginBase):
     # 插件图标
     plugin_icon = "mediasyncdel.png"
     # 插件版本
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     # 插件作者
     plugin_author = "DDSRem,thsrite"
     # 作者主页
@@ -989,6 +989,11 @@ class SaMediaSyncDel(_PluginBase):
             )
             return
 
+        strm_movie = (
+            media_type in ["Movie", "MOV"]
+            and Path(media_path).suffix.lower() == ".strm"
+        )
+
         if media_storage == "local":
             # 处理路径映射
             if self._local_library_path:
@@ -1010,6 +1015,7 @@ class SaMediaSyncDel(_PluginBase):
                 tmdb_id=tmdb_id,
                 season_num=season_num,
                 episode_num=episode_num,
+                strm_movie=strm_movie,
             )
 
             logger.info(f"正在同步删除{msg}")
@@ -1122,6 +1128,7 @@ class SaMediaSyncDel(_PluginBase):
                 tmdb_id=tmdb_id,
                 season_num=season_num,
                 episode_num=episode_num,
+                strm_movie=strm_movie,
             )
 
             # 如果没有msg使用媒体名称替代
@@ -1138,6 +1145,7 @@ class SaMediaSyncDel(_PluginBase):
                     tmdb_id=tmdb_id,
                     season_num=season_num,
                     episode_num=episode_num,
+                    strm_movie=strm_movie,
                 )
                 # 如果没有msg使用媒体名称替代
                 if not msg:
@@ -1263,6 +1271,7 @@ class SaMediaSyncDel(_PluginBase):
                 tmdb_id=tmdb_id,
                 season_num=season_num,
                 episode_num=episode_num,
+                strm_movie=strm_movie,
             )
 
             # 如果没有msg使用媒体名称替代
@@ -1279,6 +1288,7 @@ class SaMediaSyncDel(_PluginBase):
                     tmdb_id=tmdb_id,
                     season_num=season_num,
                     episode_num=episode_num,
+                    strm_movie=strm_movie,
                 )
                 # 如果没有msg使用媒体名称替代
                 if not msg:
@@ -1546,6 +1556,7 @@ class SaMediaSyncDel(_PluginBase):
         tmdb_id: int,
         season_num: str,
         episode_num: str,
+        strm_movie: bool = False,
     ):
         """
         查询转移记录
@@ -1569,6 +1580,33 @@ class SaMediaSyncDel(_PluginBase):
             transfer_history: List[TransferHistory] = self._transferhis.get_by(
                 tmdbid=tmdb_id, mtype=mtype.value, dest=media_path
             )
+            if (
+                not transfer_history
+                and tmdb_id
+                and str(tmdb_id).isdigit()
+                and (strm_movie or Path(media_path).suffix.lower() == ".strm")
+            ):
+                # 防止误删：只有同一电影目录存在唯一媒体转移记录时才兜底匹配。
+                media_dir = Path(media_path.replace("\\", "/")).parent
+                media_exts = {ext.lower() for ext in settings.RMT_MEDIAEXT}
+                candidates = [
+                    history
+                    for history in self._transferhis.get_by(
+                        tmdbid=tmdb_id, mtype=mtype.value
+                    )
+                    if history.dest
+                    and Path(history.dest.replace("\\", "/")).parent == media_dir
+                    and Path(history.dest).suffix.lower() in media_exts
+                ]
+                if len(candidates) == 1:
+                    transfer_history = candidates
+                    logger.info(
+                        f"STRM 电影 {media_path} 匹配到转移记录 {candidates[0].dest}"
+                    )
+                elif len(candidates) > 1:
+                    logger.warning(
+                        f"STRM 电影 {media_path} 找到多条转移记录，跳过自动删除"
+                    )
         # 删除电视剧
         elif mtype == MediaType.TV and not season_num and not episode_num:
             msg = f"剧集 {media_name} {tmdb_id}"
