@@ -1,6 +1,7 @@
 """STRM 电影删除时的转移记录匹配回归测试。"""
 
 import ast
+import tempfile
 import unittest
 from dataclasses import dataclass
 from enum import Enum
@@ -42,6 +43,9 @@ class Logger:
     def warning(self, message):
         pass
 
+    def warn(self, message):
+        pass
+
 
 def load_lookup_method():
     tree = ast.parse(PLUGIN_PATH.read_text(encoding="utf-8"))
@@ -49,12 +53,18 @@ def load_lookup_method():
         node for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "SaMediaSyncDel"
     )
-    method = next(
+    method_names = {
+        "has_prefix",
+        "__get_local_media_paths",
+        "__find_local_transfer_his",
+        "__get_transfer_his",
+    }
+    methods = [
         node for node in plugin_class.body
-        if isinstance(node, ast.FunctionDef) and node.name == "__get_transfer_his"
-    )
+        if isinstance(node, ast.FunctionDef) and node.name in method_names
+    ]
     isolated = ast.ClassDef(
-        name="SaMediaSyncDel", bases=[], keywords=[], body=[method], decorator_list=[]
+        name="SaMediaSyncDel", bases=[], keywords=[], body=methods, decorator_list=[]
     )
     module = ast.fix_missing_locations(ast.Module(body=[isolated], type_ignores=[]))
     scope = {
@@ -146,6 +156,93 @@ class StrmMovieHistoryTests(unittest.TestCase):
         self.plugin._transferhis = TransferHistoryOper([history])
 
         self.assertEqual(self.lookup(strm_path), [history])
+
+
+class DuplicateLocalMappingTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = Path(self.directory.name)
+        self.source = root / "emby" / "影视库"
+        self.targets = [root / name / "影视库" for name in ("CD2", "PT", "PT2")]
+        self.relative_path = Path("电影/欧美电影/浴血黑帮：不朽传奇 (2026) {tmdb-875828}/movie.strm")
+        self.emby_path = str(self.source / self.relative_path)
+        self.plugin = load_lookup_method()()
+        self.plugin._local_library_path = "\n".join(
+            f"{self.source}#{target}" for target in self.targets
+        )
+
+    def find(self, media_type="MOV", season_num=None, episode_num=None):
+        return self.plugin._SaMediaSyncDel__find_local_transfer_his(
+            media_type=media_type,
+            media_name="浴血黑帮：不朽传奇 (2026)",
+            media_path=self.emby_path,
+            tmdb_id=875828,
+            season_num=season_num,
+            episode_num=episode_num,
+        )
+
+    def history_at(self, target):
+        return TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((target / self.relative_path).with_name("浴血黑帮：不朽传奇.Peaky.Blinders.2026.mkv")),
+        )
+
+    def test_third_mapping_finds_only_matching_transfer_history(self):
+        expected = self.history_at(self.targets[2])
+        self.plugin._transferhis = TransferHistoryOper([expected])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertEqual(mapped_path, str(self.targets[2] / self.relative_path))
+        self.assertEqual(histories, [expected])
+
+    def test_records_in_multiple_destinations_are_ambiguous(self):
+        self.plugin._transferhis = TransferHistoryOper(
+            [self.history_at(self.targets[0]), self.history_at(self.targets[2])]
+        )
+
+        mapped_path, _, histories = self.find()
+
+        self.assertIsNone(mapped_path)
+        self.assertEqual(histories, [])
+
+    def test_ambiguous_first_destination_cannot_select_third(self):
+        first = self.history_at(self.targets[0])
+        another = TransferHistory(
+            875828, MediaType.MOVIE.value,
+            str((self.targets[0] / self.relative_path).with_name("other-version.mkv")),
+        )
+        third = self.history_at(self.targets[2])
+        self.plugin._transferhis = TransferHistoryOper([first, another, third])
+
+        mapped_path, _, histories = self.find()
+
+        self.assertIsNone(mapped_path)
+        self.assertEqual(histories, [])
+
+    def test_existing_mapped_file_is_skipped(self):
+        existing_path = self.targets[0] / self.relative_path
+        existing_path.parent.mkdir(parents=True)
+        existing_path.touch()
+        expected = self.history_at(self.targets[2])
+        self.plugin._transferhis = TransferHistoryOper(
+            [self.history_at(self.targets[0]), expected]
+        )
+
+        mapped_path, _, histories = self.find()
+
+        self.assertEqual(mapped_path, str(self.targets[2] / self.relative_path))
+        self.assertEqual(histories, [expected])
+
+    def test_whole_series_lookup_does_not_duplicate_path_independent_records(self):
+        expected = TransferHistory(875828, MediaType.TV.value, "unrelated/path.mkv")
+        self.plugin._transferhis = TransferHistoryOper([expected])
+
+        mapped_path, _, histories = self.find(media_type="Series")
+
+        self.assertEqual(mapped_path, str(self.targets[0] / self.relative_path))
+        self.assertEqual(histories, [expected])
 
 
 if __name__ == "__main__":
